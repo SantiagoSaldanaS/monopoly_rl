@@ -32,6 +32,9 @@ upstream_gcp/
 # Intermediate checkpoints (keep final models)
 checkpoints/monopoly_ppo_ep*.pt
 checkpoints/monopoly_ppo_transferred_*.pt
+checkpoints/monopoly_ppo_warm.pt
+checkpoints/_eval_temp.pt
+checkpoints/monopoly_ppo_best.pt
 
 # Logs & temp
 *.log

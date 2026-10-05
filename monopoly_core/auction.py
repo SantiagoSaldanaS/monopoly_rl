@@ -19,7 +19,7 @@ def default_valuation(player: "Player", tile: "Tile", board: "Board") -> int:
     - Block opponent bonus: +30% of price if an opponent is 1 tile away from a monopoly.
     - Cash reserve constraint: Never bid more than (cash - $100 safety cushion).
     """
-    if player.is_bankrupt or player.cash <= 10 or player.agent is None:
+    if player.is_bankrupt or player.cash <= 10:
         return 0
 
     max_affordable = max(0, player.cash - 100)
@@ -70,6 +70,8 @@ def conduct_auction(
             continue
         if custom_valuations and p.player_id in custom_valuations:
             val = custom_valuations[p.player_id]
+        elif hasattr(p.agent, "get_auction_bid"):
+            val = p.agent.get_auction_bid(p, tile, board)
         else:
             val = default_valuation(p, tile, board)
         willingness[p.player_id] = min(val, p.cash)

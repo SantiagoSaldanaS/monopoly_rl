@@ -64,25 +64,31 @@ class MonopolyEnv:
     def _compute_potential(self, player_id: int) -> float:
         player = self.game.players[player_id]
         if player.is_bankrupt:
-            return -5.0
+            return -10.0
         board = self.game.board
         nw = player.net_worth(board) / 500.0
-        props = sum(1 for t in board.tiles if t.owner == player_id) * 0.20
+        props = sum(1 for t in board.tiles if t.owner == player_id) * 0.35
 
-        # Monopolies: ready-to-build monopolies are worth 1.50 each
+        # Monopolies: ready-to-build monopolies are worth 2.0 each
         monopolies = 0.0
         for g in BUILDABLE_GROUPS:
             if board.owns_full_group(player_id, g):
                 indices = COLOR_GROUP_TILES[g]
                 # Fully unmortgaged monopoly -> full value!
                 if not any(board.tiles[i].is_mortgaged for i in indices):
-                    monopolies += 1.0
+                    monopolies += 2.0
                 else:
-                    monopolies += 0.4  # Impaired by mortgage
+                    monopolies += 0.8  # Impaired by mortgage
 
-        houses = sum(t.total_buildings for t in board.tiles if t.owner == player_id) * 0.75
-        mortgages = sum(1 for t in board.tiles if t.owner == player_id and t.is_mortgaged) * 0.20
-        return float(nw + props + (monopolies * 1.50) + houses - mortgages)
+        houses = 0.0
+        for t in board.tiles:
+            if t.owner == player_id:
+                houses += t.total_buildings * 0.85
+                if t.num_houses >= 3 or t.num_hotels >= 1:
+                    houses += 0.50  # Sweet-spot 3-house bonus
+
+        mortgages = sum(1 for t in board.tiles if t.owner == player_id and t.is_mortgaged) * 0.25
+        return float(nw + props + (monopolies * 2.0) + houses - mortgages)
 
     def step(
         self, action: int
@@ -95,6 +101,7 @@ class MonopolyEnv:
 
         prev_potential = self._compute_potential(0)
         prev_bankrupt = player.is_bankrupt
+        extra_reward = 0.0
 
         # 1. Decision handling for Player 0
         if self.pending_decision == "BUY_OR_AUCTION":
@@ -102,8 +109,13 @@ class MonopolyEnv:
             if action == Action.BUY_PROPERTY and player.cash >= tile.price:
                 player.cash -= tile.price
                 tile.owner = 0
+                extra_reward += 0.30
+                if tile.color_group is not None and self.game.board.owns_full_group(0, tile.color_group):
+                    extra_reward += 2.0
             else:
                 conduct_auction(tile, self.game.players, self.game.board)
+                if player.cash >= tile.price + 150:
+                    extra_reward -= 0.50
             self.pending_decision = "MANAGEMENT"
             self.turn_modified_props.clear()
             # Now advance to opponents' turns
@@ -256,18 +268,18 @@ class MonopolyEnv:
             player.cash -= cost
             tile.is_mortgaged = False
 
-        # Strictly potential-based reward: immune to cyclic reward-hacking loops
+        # Potential-based reward: immune to cyclic reward-hacking loops
         curr_potential = self._compute_potential(0)
-        step_reward = curr_potential - prev_potential
+        step_reward = (curr_potential - prev_potential) + extra_reward
 
         if player.is_bankrupt and not prev_bankrupt:
-            step_reward -= 2.0
+            step_reward -= 5.0
 
         if self.game.game_over:
             if self.game.winner_id == 0:
-                step_reward += 3.0  # Big win reward
+                step_reward += 10.0  # Decisive tournament victory!
             else:
-                step_reward -= 1.0
+                step_reward -= 2.0
 
         rewards = {"player_0": float(step_reward)}
         terminated = {"player_0": self.game.game_over or player.is_bankrupt}

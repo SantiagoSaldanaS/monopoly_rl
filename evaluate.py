@@ -23,7 +23,15 @@ def evaluate_tournament(
     league: str = "grandmaster",
 ):
     rl_agent = RLAgent(model_path=model_path, device=device, name="RL-Agent (PPO)")
-    if league == "mixed":
+    if league == "arena":
+        league_title = "Active Arena Bots (GrandmasterBot, Markov-ROI, Conservative)"
+        competitors = [
+            ("RL-Agent (PPO)", rl_agent),
+            ("GrandmasterBot", TournamentGrandmasterAgent(name="GrandmasterBot")),
+            ("Markov-ROI", MarkovROIAgent(name="Markov-ROI")),
+            ("Conservative", ConservativeAgent(name="Conservative")),
+        ]
+    elif league == "mixed":
         league_title = "Mixed League (Markov-ROI, Aggressive, Conservative)"
         competitors = [
             ("RL-Agent (PPO)", rl_agent),
@@ -107,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--games", "-g", type=int, default=100)
     parser.add_argument("--max-turns", "-t", type=int, default=350)
     parser.add_argument("--device", "-d", type=str, default="cuda")
-    parser.add_argument("--league", "-l", type=str, default="grandmaster", choices=["grandmaster", "mixed"])
+    parser.add_argument("--league", "-l", type=str, default="arena", choices=["grandmaster", "mixed", "arena"])
     args = parser.parse_args()
 
     evaluate_tournament(
