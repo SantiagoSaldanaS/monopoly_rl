@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monopoly AI Replay Visualizer</title>
+<style>
+  :root {
+    --bg-main: #0f172a;
+    --bg-card: #1e293b;
+    --border: #334155;
+    --text-primary: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --p0-color: #ef4444;
+    --p1-color: #3b82f6;
+    --p2-color: #10b981;
+    --p3-color: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg-main);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  h1 { font-size: 1.4rem; font-weight: 700; color: #fff; }
+  .status-badge {
+    background: #0284c7;
+    color: #fff;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .main-layout {
+    display: grid;
+    grid-template-columns: 720px 1fr;
+    gap: 20px;
+    flex: 1;
+  }
+  /* Monopoly Board Layout (11x11 CSS Grid) */
+  .board-container {
+    width: 720px;
+    height: 720px;
+    background: #dbeafe;
+    border: 3px solid #1e293b;
+    border-radius: 8px;
+    display: grid;
+    grid-template-columns: 80px repeat(9, 1fr) 80px;
+    grid-template-rows: 80px repeat(9, 1fr) 80px;
+    position: relative;
+    user-select: none;
+    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+  }
+  .board-center {
+    grid-column: 2 / 11;
+    grid-row: 2 / 11;
+    background: #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 24px;
+    position: relative;
+  }
+  .center-logo {
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: #b91c1c;
+    letter-spacing: 2px;
+    transform: rotate(-35deg);
+    text-shadow: 2px 2px 0 #fff, -2px -2px 0 #fff;
+    margin-bottom: 20px;
+  }
+  .turn-hud {
+    background: rgba(15, 23, 42, 0.9);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    min-width: 280px;
+  }
+  .turn-hud .turn-num { font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+  .turn-hud .event-text { font-size: 0.85rem; color: #cbd5e1; margin-top: 4px; max-height: 48px; overflow: hidden; }
+
+  /* Tiles */
+  .tile {
+    border: 1px solid #94a3b8;
+    background: #f8fafc;
+    color: #0f172a;
+    font-size: 0.65rem;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .color-bar {
+    height: 14px;
+    width: 100%;
+    border-bottom: 1px solid #64748b;
+  }
+  .tile-content {
+    flex: 1;
+    padding: 2px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    text-align: center;
+  }
+  .tile-name { font-weight: 600; line-height: 1.1; font-size: 0.6rem; }
+  .tile-price { color: #475569; font-size: 0.55rem; }
+  .bldgs-container {
+    display: flex;
+    gap: 1px;
+    justify-content: center;
+    margin-top: 1px;
+  }
+  .house-icon {
+    width: 6px;
+    height: 6px;
+    background: #16a34a;
+    border-radius: 1px;
+  }
+  .hotel-icon {
+    width: 8px;
+    height: 6px;
+    background: #dc2626;
+    border-radius: 1px;
+  }
+  .owner-ribbon {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+  }
+
+  /* Player Tokens */
+  .tokens-container {
+    display: flex;
+    gap: 3px;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding-top: 2px;
+  }
+  .token {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    font-weight: 800;
+    color: #fff;
+  }
+  .token-p0 { background: var(--p0-color); }
+  .token-p1 { background: var(--p1-color); }
+  .token-p2 { background: var(--p2-color); }
+  .token-p3 { background: var(--p3-color); }
+
+  /* Dashboard Panel */
+  .dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .players-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+  .player-card {
+    background: #0f172a;
+    border-left: 4px solid #fff;
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .player-card.active { box-shadow: 0 0 0 2px var(--accent); }
+  .player-card.bankrupt { opacity: 0.4; filter: grayscale(1); }
+  .player-card h3 { font-size: 0.95rem; margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 3px; }
+  .stat-val { font-weight: 600; color: #f1f5f9; }
+
+  /* Controls */
+  .controls-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .btn-group {
+    display: flex;
+    gap: 8px;
+  }
+  button {
+    background: #334155;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  button:hover { background: #475569; }
+  button.primary { background: #0284c7; }
+  button.primary:hover { background: #0369a1; }
+  .slider-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  input[type="range"] {
+    flex: 1;
+    cursor: pointer;
+    accent-color: var(--accent);
+  }
+  .log-box {
+    height: 180px;
+    background: #090d16;
+    border-radius: 6px;
+    padding: 10px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .log-entry { margin-bottom: 4px; line-height: 1.3; }
+  .log-entry.active-turn { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Monopoly AI Interactive Visualizer</h1>
+    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">Official Tournament Rules &bull; Full Telemetry Replay</div>
+  </div>
+  <div class="status-badge" id="replayStatus">Frame 0 / 0</div>
+</header>
+
+<div class="main-layout">
+  <!-- Monopoly Board -->
+  <div class="board-container" id="board">
+    <div class="board-center">
+      <div class="center-logo">MONOPOLY</div>
+      <div class="turn-hud">
+        <div class="turn-num" id="hudTurn">Turn 0</div>
+        <div class="event-text" id="hudEvent">Ready</div>
+        <div style="margin-top: 8px; font-size: 0.75rem; color: #94a3b8;">
+          Bank Houses: <span id="bankHouses" style="color:#fff; font-weight:600;">32</span> / 32 &bull; 
+          Hotels: <span id="bankHotels" style="color:#fff; font-weight:600;">12</span> / 12
+        </div>
+      </div>
+    </div>
+    <!-- 40 Tiles dynamically positioned -->
+  </div>
+
+  <!-- Dashboard -->
+  <div class="dashboard">
+    <!-- Playback Controls -->
+    <div class="card controls-panel">
+      <div class="slider-container">
+        <span style="font-size: 0.8rem; color: var(--text-muted); min-width: 45px;">Turn:</span>
+        <input type="range" id="frameSlider" min="0" max="0" value="0">
+        <span id="sliderVal" style="font-size: 0.85rem; font-weight:600; min-width: 60px;">0 / 0</span>
+      </div>
+      <div class="btn-group">
+        <button id="btnPrev">&laquo; Prev</button>
+        <button id="btnPlay" class="primary">&#9654; Play</button>
+        <button id="btnNext">Next &raquo;</button>
+        <button id="btnReset">Reset</button>
+        <select id="speedSelect" style="background:#334155; color:#fff; border:none; border-radius:6px; padding:6px 12px; font-weight:600;">
+          <option value="500">Speed: 1x</option>
+          <option value="250" selected>Speed: 2x</option>
+          <option value="100">Speed: 5x</option>
+          <option value="30">Speed: 15x</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Players Cards -->
+    <div class="card">
+      <h2 style="font-size: 1rem; margin-bottom: 12px; color: #e2e8f0;">Players Status</h2>
+      <div class="players-grid" id="playersGrid"></div>
+    </div>
+
+    <!-- Real-time Log -->
+    <div class="card" style="flex: 1; display:flex; flex-direction:column;">
+      <h2 style="font-size: 0.95rem; margin-bottom: 8px; color: #e2e8f0;">Event Telemetry Log</h2>
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Load bundled replay data if present -->
+<script src="replay_data.js"></script>
+<script>
+// Tile color specs
+const TILE_DATA = [
+  { name: "Go", price: 0, group: "NONE" },
+  { name: "Mediterranean", price: 60, group: "BROWN", color: "#8b5a2b" },
+  { name: "Chest", price: 0, group: "NONE" },
+  { name: "Baltic Ave", price: 60, group: "BROWN", color: "#8b5a2b" },
+  { name: "Income Tax", price: 200, group: "NONE" },
+  { name: "Reading RR", price: 200, group: "RR", color: "#64748b" },
+  { name: "Oriental Ave", price: 100, group: "SKY", color: "#38bdf8" },
+  { name: "Chance", price: 0, group: "NONE" },
+  { name: "Vermont Ave", price: 100, group: "SKY", color: "#38bdf8" },
+  { name: "Connecticut", price: 120, group: "SKY", color: "#38bdf8" },
+  { name: "Jail", price: 0, group: "NONE" },
+  { name: "St. Charles", price: 140, group: "PINK", color: "#ec4899" },
+  { name: "Electric Co", price: 150, group: "UTIL", color: "#facc15" },
+  { name: "States Ave", price: 140, group: "PINK", color: "#ec4899" },
+  { name: "Virginia Ave", price: 160, group: "PINK", color: "#ec4899" },
+  { name: "Pennsylvania RR", price: 200, group: "RR", color: "#64748b" },
+  { name: "St. James Pl", price: 180, group: "ORANGE", color: "#f97316" },
+  { name: "Chest", price: 0, group: "NONE" },
+  { name: "Tennessee", price: 180, group: "ORANGE", color: "#f97316" },
+  { name: "New York Ave", price: 200, group: "ORANGE", color: "#f97316" },
+  { name: "Free Parking", price: 0, group: "NONE" },
+  { name: "Kentucky Ave", price: 220, group: "RED", color: "#ef4444" },
+  { name: "Chance", price: 0, group: "NONE" },
+  { name: "Indiana Ave", price: 220, group: "RED", color: "#ef4444" },
+  { name: "Illinois Ave", price: 240, group: "RED", color: "#ef4444" },
+  { name: "B&O RR", price: 200, group: "RR", color: "#64748b" },
+  { name: "Atlantic Ave", price: 260, group: "YELLOW", color: "#eab308" },
+  { name: "Ventnor Ave", price: 260, group: "YELLOW", color: "#eab308" },
+  { name: "Water Works", price: 150, group: "UTIL", color: "#facc15" },
+  { name: "Marvin Gardens", price: 280, group: "YELLOW", color: "#eab308" },
+  { name: "Go To Jail", price: 0, group: "NONE" },
+  { name: "Pacific Ave", price: 300, group: "GREEN", color: "#22c55e" },
+  { name: "North Carolina", price: 300, group: "GREEN", color: "#22c55e" },
+  { name: "Chest", price: 0, group: "NONE" },
+  { name: "Pennsylvania", price: 320, group: "GREEN", color: "#22c55e" },
+  { name: "Short Line", price: 200, group: "RR", color: "#64748b" },
+  { name: "Chance", price: 0, group: "NONE" },
+  { name: "Park Place", price: 350, group: "DARK_BLUE", color: "#2563eb" },
+  { name: "Luxury Tax", price: 100, group: "NONE" },
+  { name: "Boardwalk", price: 400, group: "DARK_BLUE", color: "#2563eb" }
+];
+
+const PLAYER_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b"];
+
+// Grid coordinates for the 40 Monopoly tiles around the 11x11 perimeter
+function getGridPosition(index) {
+  if (index <= 10) return { r: 11, c: 11 - index }; // Bottom: 0 to 10
+  if (index <= 20) return { r: 11 - (index - 10), c: 1 }; // Left: 10 to 20
+  if (index <= 30) return { r: 1, c: 1 + (index - 20) }; // Top: 20 to 30
+  return { r: 1 + (index - 30), c: 11 }; // Right: 30 to 39
+}
+
+let replay = window.REPLAY_DATA || null;
+let currentFrame = 0;
+let isPlaying = false;
+let playInterval = null;
+
+function initBoard() {
+  const boardEl = document.getElementById("board");
+  for (let i = 0; i < 40; i++) {
+    const tile = TILE_DATA[i];
+    const pos = getGridPosition(i);
+    const div = document.createElement("div");
+    div.className = "tile";
+    div.id = `tile-${i}`;
+    div.style.gridRow = pos.r;
+    div.style.gridColumn = pos.c;
+
+    let barHtml = "";
+    if (tile.color) {
+      barHtml = `<div class="color-bar" style="background:${tile.color}"></div>`;
+    }
+
+    div.innerHTML = `
+      ${barHtml}
+      <div class="tile-content">
+        <div class="tile-name">${tile.name}</div>
+        <div class="bldgs-container" id="bldgs-${i}"></div>
+        <div class="tokens-container" id="tokens-${i}"></div>
+        <div class="tile-price">${tile.price ? '$'+tile.price : ''}</div>
+      </div>
+      <div class="owner-ribbon" id="owner-${i}"></div>
+    `;
+    boardEl.appendChild(div);
+  }
+}
+
+function renderFrame(frameIdx) {
+  if (!replay || !replay.frames[frameIdx]) return;
+  const frame = replay.frames[frameIdx];
+
+  // Update HUD
+  document.getElementById("hudTurn").innerText = `Turn ${frame.turn}`;
+  document.getElementById("hudEvent").innerText = frame.details || "";
+  document.getElementById("bankHouses").innerText = frame.available_houses;
+  document.getElementById("bankHotels").innerText = frame.available_hotels;
+  document.getElementById("replayStatus").innerText = `Turn ${frame.turn} &bull; Frame ${frameIdx + 1} / ${replay.frames.length}`;
+  document.getElementById("frameSlider").value = frameIdx;
+  document.getElementById("sliderVal").innerText = `${frameIdx + 1} / ${replay.frames.length}`;
+
+  // Clear tokens and building icons
+  for (let i = 0; i < 40; i++) {
+    document.getElementById(`tokens-${i}`).innerHTML = "";
+    document.getElementById(`bldgs-${i}`).innerHTML = "";
+    document.getElementById(`owner-${i}`).style.background = "transparent";
+  }
+
+  // Render Tiles Ownership & Buildings
+  frame.tiles.forEach(t => {
+    if (t.owner !== null && t.owner !== undefined) {
+      document.getElementById(`owner-${t.index}`).style.background = PLAYER_COLORS[t.owner];
+    }
+    const bldgsContainer = document.getElementById(`bldgs-${t.index}`);
+    if (t.num_hotels === 1) {
+      bldgsContainer.innerHTML = '<div class="hotel-icon" title="Hotel"></div>';
+    } else if (t.num_houses > 0) {
+      let hHtml = "";
+      for (let h = 0; h < t.num_houses; h++) hHtml += '<div class="house-icon" title="House"></div>';
+      bldgsContainer.innerHTML = hHtml;
+    }
+  });
+
+  // Render Players Tokens
+  frame.players.forEach(p => {
+    if (p.is_bankrupt) return;
+    const tokenEl = document.createElement("div");
+    tokenEl.className = `token token-p${p.id}`;
+    tokenEl.innerText = `P${p.id + 1}`;
+    tokenEl.title = `${p.name} ($${p.cash})`;
+    document.getElementById(`tokens-${p.position}`).appendChild(tokenEl);
+  });
+
+  // Render Players Status Cards
+  const pGrid = document.getElementById("playersGrid");
+  pGrid.innerHTML = "";
+  frame.players.forEach(p => {
+    const card = document.createElement("div");
+    card.className = `player-card ${p.id === frame.active_player ? 'active' : ''} ${p.is_bankrupt ? 'bankrupt' : ''}`;
+    card.style.borderLeftColor = PLAYER_COLORS[p.id];
+
+    card.innerHTML = `
+      <h3>
+        <span style="color:${PLAYER_COLORS[p.id]}">${p.name}</span>
+        <span>${p.is_bankrupt ? 'BANKRUPT' : (p.in_jail ? 'IN JAIL' : '')}</span>
+      </h3>
+      <div class="stat-row"><span>Cash:</span><span class="stat-val">$${p.cash}</span></div>
+      <div class="stat-row"><span>Net Worth:</span><span class="stat-val">$${p.net_worth}</span></div>
+      <div class="stat-row"><span>Position:</span><span class="stat-val">${TILE_DATA[p.position].name}</span></div>
+    `;
+    pGrid.appendChild(card);
+  });
+
+  // Append to Telemetry Log
+  const logBox = document.getElementById("logBox");
+  const logEntry = document.createElement("div");
+  logEntry.className = `log-entry active-turn`;
+  logEntry.innerText = `[T${frame.turn}] ${frame.details}`;
+  logBox.prepend(logEntry);
+  if (logBox.children.length > 50) logBox.removeChild(logBox.lastChild);
+}
+
+function startPlay() {
+  if (isPlaying) return;
+  isPlaying = true;
+  document.getElementById("btnPlay").innerHTML = "&#10074;&#10074; Pause";
+  const speed = parseInt(document.getElementById("speedSelect").value);
+  playInterval = setInterval(() => {
+    if (currentFrame < replay.frames.length - 1) {
+      currentFrame++;
+      renderFrame(currentFrame);
+    } else {
+      stopPlay();
+    }
+  }, speed);
+}
+
+function stopPlay() {
+  isPlaying = false;
+  document.getElementById("btnPlay").innerHTML = "&#9654; Play";
+  clearInterval(playInterval);
+}
+
+// Event Listeners
+document.getElementById("btnPlay").addEventListener("click", () => {
+  if (isPlaying) stopPlay(); else startPlay();
+});
+document.getElementById("btnNext").addEventListener("click", () => {
+  stopPlay();
+  if (currentFrame < replay.frames.length - 1) {
+    currentFrame++;
+    renderFrame(currentFrame);
+  }
+});
+document.getElementById("btnPrev").addEventListener("click", () => {
+  stopPlay();
+  if (currentFrame > 0) {
+    currentFrame--;
+    renderFrame(currentFrame);
+  }
+});
+document.getElementById("btnReset").addEventListener("click", () => {
+  stopPlay();
+  currentFrame = 0;
+  renderFrame(0);
+});
+document.getElementById("frameSlider").addEventListener("input", (e) => {
+  stopPlay();
+  currentFrame = parseInt(e.target.value);
+  renderFrame(currentFrame);
+});
+document.getElementById("speedSelect").addEventListener("change", () => {
+  if (isPlaying) { stopPlay(); startPlay(); }
+});
+
+window.onload = () => {
+  initBoard();
+  if (replay) {
+    document.getElementById("frameSlider").max = replay.frames.length - 1;
+    renderFrame(0);
+  }
+};
+</script>
+</body>
+</html>

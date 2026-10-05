@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments & Virtual Environments
+.env
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Upstream reference repos
+upstream_gnome/
+upstream_gcp/
+
+# Intermediate checkpoints (keep final models)
+checkpoints/monopoly_ppo_ep*.pt
+checkpoints/monopoly_ppo_transferred_*.pt
+
+# Logs & temp
+*.log
+tournament_logs/
+temp_*.js
+temp_*.py
