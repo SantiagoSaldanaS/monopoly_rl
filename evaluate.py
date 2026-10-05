@@ -24,11 +24,11 @@ def evaluate_tournament(
 ):
     rl_agent = RLAgent(model_path=model_path, device=device, name="RL-Agent (PPO)")
     if league == "arena":
-        league_title = "Active Arena Bots (GrandmasterBot, Markov-ROI, Conservative)"
+        league_title = "Active Arena Bots (Politically Perfect Organism, Cash Elo, Moneybags Markov, Conservative)"
         competitors = [
-            ("RL-Agent (PPO)", rl_agent),
-            ("GrandmasterBot", TournamentGrandmasterAgent(name="GrandmasterBot")),
-            ("Markov-ROI", MarkovROIAgent(name="Markov-ROI")),
+            ("Politically Perfect Organism (PPO)", rl_agent),
+            ("Cash Elo (Grandmaster)", TournamentGrandmasterAgent(name="Cash Elo")),
+            ("Moneybags Markov (Markov-ROI)", MarkovROIAgent(name="Moneybags Markov")),
             ("Conservative", ConservativeAgent(name="Conservative")),
         ]
     elif league == "mixed":
@@ -86,7 +86,7 @@ def evaluate_tournament(
             wins["Draw"] += 1
 
         if (game_idx + 1) % 25 == 0 or (game_idx + 1) == num_games:
-            rl_w = wins["RL-Agent (PPO)"]
+            rl_w = wins[competitors[0][0]]
             print(f"Game {game_idx + 1:3d}/{num_games} | RL Wins: {rl_w} ({rl_w / (game_idx + 1) * 100:.1f}%)")
 
     elapsed = time.time() - t0
