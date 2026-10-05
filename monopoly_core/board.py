@@ -230,6 +230,44 @@ class Board:
 
         return True
 
+    def build_house(self, tile_index: int, player_id: int) -> bool:
+        """
+        Executes building 1 house/hotel on tile_index for player_id.
+        Updates tile buildings and bank inventory.
+        Returns True if successful, False if illegal.
+        """
+        if not self.can_build_house(tile_index, player_id):
+            return False
+        tile = self.tiles[tile_index]
+        if tile.num_houses == 4:
+            tile.num_houses = 0
+            tile.num_hotels = 1
+            self.available_houses += 4
+            self.available_hotels -= 1
+        else:
+            tile.num_houses += 1
+            self.available_houses -= 1
+        return True
+
+    def sell_building(self, tile_index: int, player_id: int) -> int:
+        """
+        Sells 1 building (downgrades hotel to 4 houses or removes 1 house).
+        Returns cash refund amount (50% of house_cost), or 0 if illegal.
+        """
+        if not self.can_sell_building(tile_index, player_id):
+            return 0
+        tile = self.tiles[tile_index]
+        refund = tile.house_cost // 2
+        if tile.num_hotels == 1:
+            tile.num_hotels = 0
+            tile.num_houses = 4
+            self.available_hotels += 1
+            self.available_houses -= 4
+        else:
+            tile.num_houses -= 1
+            self.available_houses += 1
+        return refund
+
     def can_mortgage(self, tile_index: int, player_id: int) -> bool:
         """
         Verifies if property can be mortgaged.

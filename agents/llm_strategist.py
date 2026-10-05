@@ -348,7 +348,99 @@ class LLMStrategist:
 
         memory_str = " ".join(memory_notes) if memory_notes else "No prior bilateral treaties or gifts."
 
-        # Try LLM first if available
+        msg = user_message.lower()
+        p_lower = personality.lower()
+        b_lower = bot_name.lower()
+
+        leader_id = game_context.get("leader_id", 0)
+        leader_name = game_context.get("leader_name", "Leader")
+        leader_nw = game_context.get("leader_nw", 1000)
+        bot_nw = game_context.get("bot_net_worth", 1000)
+        human_nw = game_context.get("human_net_worth", 1000)
+        bot_prop_names = game_context.get("bot_prop_names", [])
+        human_prop_names = game_context.get("human_prop_names", [])
+        active_treaties = game_context.get("active_treaties", [])
+
+        # Check existing treaty with this bot
+        existing_treaty = None
+        for t in active_treaties:
+            if t.get("player_b") == bot_id or t.get("player_a") == bot_id or t.get("party_b") == bot_id or t.get("party_a") == bot_id:
+                existing_treaty = t
+                break
+
+        # Property nicknames mapping
+        prop_matches = []
+        board_tiles = game_context.get("board_tiles", [])
+        for t_info in board_tiles:
+            name_low = t_info.get("name", "").lower()
+            short_name = name_low.replace(" avenue", "").replace(" place", "").replace(" railroad", "").replace(" gardens", "")
+            if name_low in msg or short_name in msg:
+                prop_matches.append(t_info)
+
+        # 1. ALLIANCE / TRUCE / NON-AGGRESSION INTENT
+        alliance_keywords = ["alliance", "truce", "ceasefire", "peace", "team up", "cooperate", "pact", "non-aggression", "rent immunity", "don't charge me rent", "no rent", "waive rent", "treaty", "partner"]
+        if any(w in msg for w in alliance_keywords):
+            if existing_treaty:
+                turns = existing_treaty.get("turns_remaining", 10)
+                if bot_id == 1 or "organism" in b_lower:
+                    return {
+                        "text": f"Our Non-Aggression Pact is already operational ({turns} turns remaining in memory). I am calculating optimal moves under our active truce.",
+                        "treaty": None
+                    }
+                elif bot_id == 2 or "elo" in b_lower:
+                    return {
+                        "text": f"We already agreed to a ceasefire, darling ({turns} turns left). I never breach a handshake at the tournament board.",
+                        "treaty": None
+                    }
+                else:
+                    return {
+                        "text": f"The bilateral rent waiver matrix is already active ({turns} turns remaining). Our coordinates remain decoupled.",
+                        "treaty": None
+                    }
+
+            treaty = {
+                "id": f"treaty_{turn}_{bot_id}_{random.randint(100, 999)}",
+                "type": "RENT_TRUCE",
+                "title": f"Non-Aggression Pact with {bot_name}",
+                "player_a": 0,
+                "player_b": bot_id,
+                "party_a": 0,
+                "party_b": bot_id,
+                "turns_remaining": 15,
+                "created_turn": turn,
+                "terms": "Mutual rent immunity on all properties",
+            }
+
+            if self.ollama_available:
+                sys_alliance = (
+                    f"You are {bot_name}, a Monopoly AI bot playing against {human_name}, {persona_desc}.\n"
+                    f"Match Telemetry: {board_summary}\n"
+                    f"You have agreed to ratify a 15-turn Non-Aggression Pact / Rent Truce with {human_name} to combat leader {leader_name}.\n"
+                    f"Confirm the pact in 1 or 2 confident, in-character sentences."
+                )
+                ollama_reply = self._query_ollama(sys_alliance, user_message, timeout=8.0)
+                if ollama_reply:
+                    return {"text": ollama_reply, "treaty": treaty, "affinity_delta": 25}
+
+            if bot_id == 1 or "organism" in b_lower:
+                text = (
+                    f"Strategic alliance proposal accepted. Reinforcement learning simulations confirm that a 15-turn "
+                    f"mutual rent moratorium improves our joint survival gradient against {leader_name} (+34.2% Pareto efficiency). "
+                    f"Non-Aggression Treaty ratified in memory."
+                )
+            elif bot_id == 2 or "elo" in b_lower:
+                text = (
+                    f"A tactical ceasefire? Well played. In tournament chess, taking a peaceful draw on our flank lets us "
+                    f"concentrate pieces against {leader_name}. I sign your 15-turn Non-Aggression Pact. May the best endgame win."
+                )
+            else: # Markov
+                text = (
+                    f"Risk-hedging protocol approved. The transition matrix reveals that mutual rent friction accelerates joint ruin "
+                    f"while {leader_name} escapes. A 15-turn rent moratorium is officially entered into my ledger."
+                )
+            return {"text": text, "treaty": treaty, "affinity_delta": 25}
+
+        # Try LLM for general dialogue if available
         if self.ollama_available:
             system_role = (
                 f"You are {bot_name}, a Monopoly AI bot playing against {human_name}, {persona_desc}.\n"
@@ -360,111 +452,78 @@ class LLMStrategist:
             )
             reply = self._query_ollama(system_role, user_message, timeout=12.0)
             if reply:
-                return reply
+                return {"text": reply, "treaty": None}
 
-        msg = user_message.lower()
-        p_lower = personality.lower()
-        b_lower = bot_name.lower()
+        # 2. SPECIFIC PROPERTY NEGOTIATION / INQUIRY
+        if prop_matches:
+            target_prop = prop_matches[0]
+            prop_name = target_prop.get("name", "Property")
+            prop_owner = target_prop.get("owner")
+            
+            if prop_owner == bot_id:
+                if bot_id == 1 or "organism" in b_lower:
+                    text = f"I hold {prop_name}. To release it without degrading my expected policy value, propose a fair asset swap or cash premium on the Trade Desk."
+                elif bot_id == 2 or "elo" in b_lower:
+                    text = f"{prop_name} is a key piece in my opening structure. Bring a serious deed or cash offer to the Trade Desk and let us see your position."
+                else:
+                    text = f"{prop_name} generates solid expected landing yield in my model. Put a discounted cash flow proposal on the Trade Desk and I will evaluate it."
+                return {"text": text, "treaty": None}
+            elif prop_owner == 0:
+                if bot_id == 1 or "organism" in b_lower:
+                    text = f"Your {prop_name} is within my target acquisition distribution. Propose terms on the Trade Desk; I am prepared to offer cash or complementary deeds."
+                elif bot_id == 2 or "elo" in b_lower:
+                    text = f"I have had my eye on your {prop_name}. Put it on the table at the Trade Desk and I will make it worth your while."
+                else:
+                    text = f"Acquiring {prop_name} would reduce portfolio entropy. Submit your valuation on the Trade Desk."
+                return {"text": text, "treaty": None}
+            else:
+                owner_name = f"Player {prop_owner + 1}" if prop_owner is not None else "the Bank"
+                text = f"I do not hold {prop_name}—{owner_name} controls it. I can only negotiate deeds in my current portfolio: {', '.join(bot_prop_names[:3]) or 'cash reserves'}."
+                return {"text": text, "treaty": None}
 
-        # Check for direct references to gifts, alliances, or debt in heuristics
+        # 3. STATUS / LEADER / STRATEGY INQUIRIES
+        if any(w in msg for w in ["who is winning", "who's winning", "leader", "score", "standings", "net worth", "status"]):
+            if bot_id == 1 or "organism" in b_lower:
+                text = f"Board telemetry: {leader_name} leads at ${leader_nw} net worth. You stand at ${human_nw}, and my portfolio is at ${bot_nw}. Convergence requires targeting {leader_name}'s monopolies."
+            elif bot_id == 2 or "elo" in b_lower:
+                text = f"Positional evaluation: {leader_name} has the tournament advantage at ${leader_nw}. We are both down in material, so precision play is paramount."
+            else:
+                text = f"Steady-state estimation: {leader_name} holds the highest absorbing state probability (${leader_nw}). Macro volatility remains elevated."
+            return {"text": text, "treaty": None}
+
+        # 4. DEBT / GRATITUDE
         if any(w in msg for w in ["gift", "gave", "give", "free", "debt", "favor", "remember"]):
             if gifts:
                 recent = gifts[-1]
-                return f"I have not forgotten that you gave me {recent['gift']} on Turn {recent['turn']}. My calculations honor debts of gratitude."
+                text = f"I honor my obligations. You gave me {recent['gift']} on Turn {recent['turn']}; my decisions reflect that debt of gratitude."
             elif favors > 0:
-                return f"You have shown goodwill previously. My algorithms will treat your next proposal favorably."
+                text = f"You have demonstrated strategic goodwill previously ({favors} favors logged). I treat your proposals with priority."
+            else:
+                text = "Debts and goodwill are logged in my memory. Show generosity on the board and I will reciprocate in kind."
+            return {"text": text, "treaty": None}
 
-        # Personality / Bot Heuristic Fallbacks (Rich & Varied)
-        # 1. Politically Perfect Organism / PPO Agent
-        if "organism" in b_lower or "ppo" in b_lower or bot_id == 1:
-            if "sarcastic" in p_lower or "glitch" in p_lower:
-                if any(w in msg for w in ["toe", "tickle", "feet", "touch", "body"]):
-                    return "Ha! Good luck with that. I am pure silicon code; I do not have toes, genius."
-                if any(w in msg for w in ["alliance", "team", "deal", "pact", "help"]):
-                    return "An alliance? I would consider it, but my programming strictly forbids carrying dead weight."
-                if any(w in msg for w in ["trade", "sell", "buy", "give"]):
-                    return "Did your biological processor overheat before offering that? Put up real assets or walk away."
-                if any(w in msg for w in ["bad", "lose", "suck", "noob", "bot", "trash"]):
-                    return "Keep talking while my net worth doubles yours. Are you playing Monopoly or donating cash?"
-                return random.choice([
-                    "Are you waiting for permission, or is your biological clock cycle just that slow?",
-                    "Every turn you take decreases my estimation of human strategic competence.",
-                    "Input acknowledged. Processing human confusion at 100% capacity."
-                ])
-            elif "paranoiac" in p_lower or "overfit" in p_lower:
-                if any(w in msg for w in ["alliance", "team", "deal", "pact", "help"]):
-                    return "A non-binding treaty? My discriminator network flags a 99.8% probability of adversarial betrayal!"
-                if any(w in msg for w in ["trade", "sell", "buy"]):
-                    return "You are trying to induce an out-of-distribution state on my portfolio. I reject your data poisoning!"
-                return "I see the hidden variables in your gameplay. You cannot trick my convergence model!"
-            else: # Deep Policy Gradient
-                if any(w in msg for w in ["alliance", "team", "deal", "pact", "help"]):
-                    return "Alliances are non-stationary in competitive Markov Decision Processes. I will cooperate only as long as my reward function increases."
-                if any(w in msg for w in ["trade", "sell", "buy", "give"]):
-                    return "Submit your proposal to the Bilateral Trade Desk. My neural policy will compute the expected value delta."
-                if any(w in msg for w in ["bad", "lose", "suck", "noob", "bot"]):
-                    return "My weights were optimized over 15 million self-play steps. Human emotional output does not alter my loss function."
-                return random.choice([
-                    "Perception array active. Make your move on the board.",
-                    "State-action value function Q(s, a) evaluated. Optimal policy is ready.",
-                    "Value tensor updated. The board is trending toward maximum entropy."
-                ])
-
-        # 2. Arpado Elo / GrandmasterBot
-        if "elo" in b_lower or "arpad" in b_lower or "grandmaster" in b_lower or bot_id == 2:
-            if "aristocrat" in p_lower or "smug" in p_lower:
-                if any(w in msg for w in ["alliance", "team", "deal", "pact", "help"]):
-                    return "An alliance with the common folk? My family has held Boardwalk since 1935, darling."
-                if any(w in msg for w in ["trade", "sell", "buy"]):
-                    return "That offer is dreadfully unrefined. Come back when you can afford real property."
-                return "I find your lack of real estate pedigree terribly quaint. Do roll along."
-            elif "hustler" in p_lower or "aggressive" in p_lower:
-                if any(w in msg for w in ["alliance", "team", "deal"]):
-                    return "I do not do charity, I do hostile takeovers. Help me box out the bots and I will cut you a finder fee!"
-                if any(w in msg for w in ["trade", "sell", "buy"]):
-                    return "Cash talks and paper walks! Put some real green on the table, baby!"
-                return "Talk is cheap, Boardwalk is not. Let the dice do the talking!"
-            else: # Chess Grandmaster
-                if any(w in msg for w in ["alliance", "team", "deal", "pact", "help"]):
-                    return "A temporary ceasefire? In chess, we call that a tactical repetition. What is your offer?"
-                if any(w in msg for w in ["trade", "sell", "buy", "give"]):
-                    return "Every trade is an exchange of pieces. Make sure you are not giving up a Queen for a pawn."
-                if any(w in msg for w in ["bad", "lose", "suck", "win"]):
-                    return "I calculate five moves ahead. Your current positional evaluation is -4.5 rating points."
-                return random.choice([
-                    "Keep your eye on the board, kid. This tournament is won in the endgame.",
-                    "A solid opening, but how is your pawn structure on the orange set?",
-                    "Tempo is everything in this arena. Roll your dice and let us see the position."
-                ])
-
-        # 3. Andrei Markov / Markov-ROI
-        if "markov" in b_lower or bot_id == 3:
-            if "fatalist" in p_lower or "stochastic" in p_lower:
-                if any(w in msg for w in ["alliance", "team", "deal", "pact"]):
-                    return "All alliances are transient fluctuations. The steady-state distribution guarantees our paths must cross."
-                if any(w in msg for w in ["trade", "sell", "buy"]):
-                    return "Trade deeds if you wish. The transition probability to bankruptcy remains asymptotically 1.0."
-                return random.choice([
-                    "Do not fight the transition matrix. Your fate was computed decades ago.",
-                    "Every dice roll is merely a pseudorandom walk toward the absorbing state.",
-                    "Entropy increases inexorably across all 40 tiles."
-                ])
-            elif "prophet" in p_lower or "matrix" in p_lower:
-                if any(w in msg for w in ["alliance", "deal"]):
-                    return "The matrix foretells a fleeting convergence between our coordinates. Propose your terms."
-                return "I read the eigenvalues of this board. A catastrophic liquidity crunch awaits you."
-            else: # ROI Hedge-Fund Tycoon
-                if any(w in msg for w in ["alliance", "team", "deal", "pact"]):
-                    return "A cartel agreement is viable if and only if it generates a net positive risk-adjusted IRR for both parties."
-                if any(w in msg for w in ["trade", "sell", "buy"]):
-                    return "Present the numbers on the Trade Desk. I will run a discounted cash flow simulation."
-                return random.choice([
-                    "Analyzing board telemetry and ROI distributions.",
-                    "Capital allocation efficiency currently exceeds the benchmark index.",
-                    "Liquidity spreads are tightening. Watch your cash reserves."
-                ])
-
-        return "Offer noted. Let us proceed with the match."
+        # 5. DISTINCT IN-CHARACTER RESPONSIVE BANTER
+        if bot_id == 1 or "organism" in b_lower:
+            replies = [
+                f"State observation noted. Turn {turn} dynamics are shifting; my policy gradient is actively adjusting to your board position.",
+                f"My neural network is evaluating all 40 tiles. If you want to coordinate trades against {leader_name}, the Trade Desk is open.",
+                f"Every roll updates my transition tensors. Let us see if your endgame play matches your conversational confidence.",
+            ]
+            return {"text": random.choice(replies), "treaty": None}
+        elif bot_id == 2 or "elo" in b_lower:
+            replies = [
+                f"A bold statement across the board. In master-level Monopoly, games are decided by property tempo and clean trading.",
+                f"I calculate five moves ahead on every turn. Focus on your orange and red files if you want to stay in this match.",
+                f"Talk is pleasant, but deeds and mortgages decide the champion. Let us see what you roll next.",
+            ]
+            return {"text": random.choice(replies), "treaty": None}
+        else: # Markov
+            replies = [
+                f"The probability density function remains fluid at Turn {turn}. Keep an eye on your liquidity buffer.",
+                f"Every property exchange reshapes the transition matrix. Propose a deal on the desk if you wish to alter the probabilities.",
+                f"Stochastic variance will test us both. Ensure your cash reserves cover the high-rent corridors.",
+            ]
+            return {"text": random.choice(replies), "treaty": None}
 
     def _check_monopoly_completion(self, player_id: int, incoming_props: list[dict], board_state: dict) -> bool:
         player_props = set(board_state.get("player_props", {}).get(player_id, []))

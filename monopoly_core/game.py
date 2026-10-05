@@ -50,6 +50,7 @@ class MonopolyGame:
         self.elimination_order: list[int] = []
         self.turn_order: list[int] = list(range(num_players))
         self.turn_order_pos: int = 0
+        self.immunity_checker: Optional[Callable] = None
 
     def log(self, message: str):
         if self.enable_logging:
@@ -222,7 +223,7 @@ class MonopolyGame:
     def resolve_tile_landing(
         self,
         player: Player,
-        dice_sum: int,
+        dice_sum: int = 7,
         forced_utility_multiplier: Optional[int] = None,
         force_double_railroad: bool = False,
     ):
@@ -298,17 +299,29 @@ class MonopolyGame:
                     if winner_id is not None:
                         self.log(f"AUCTION: {self.players[winner_id].name} won {tile.name} for ${winning_bid}.")
             elif tile.owner != player.player_id:
-                # Owned by another player: Rent is due
-                rent = self.board.calculate_rent(
-                    tile.index,
-                    dice_sum,
-                    forced_utility_multiplier=forced_utility_multiplier,
-                    force_double_railroad=force_double_railroad,
-                )
-                if rent > 0:
+                # Owned by another player: Check diplomatic rent immunity
+                waived = False
+                waiver_reason = ""
+                if self.immunity_checker is not None:
+                    try:
+                        waived, waiver_reason = self.immunity_checker(player.player_id, tile.owner, tile.index)
+                    except Exception:
+                        waived = False
+
+                if waived:
                     creditor = self.players[tile.owner]
-                    self.log(f"{player.name} owes ${rent} rent to {creditor.name} for {tile.name}.")
-                    self.handle_payment(player, creditor, rent)
+                    self.log(f"DIPLOMATIC IMMUNITY: Rent on {tile.name} was waived by {creditor.name}! ({waiver_reason})")
+                else:
+                    rent = self.board.calculate_rent(
+                        tile.index,
+                        dice_sum,
+                        forced_utility_multiplier=forced_utility_multiplier,
+                        force_double_railroad=force_double_railroad,
+                    )
+                    if rent > 0:
+                        creditor = self.players[tile.owner]
+                        self.log(f"{player.name} owes ${rent} rent to {creditor.name} for {tile.name}.")
+                        self.handle_payment(player, creditor, rent)
 
     def execute_turn(self) -> bool:
         """

@@ -82,6 +82,7 @@ class GameSession:
             3: {"affinity": 0, "gifts_received": [], "favors_owed": 0, "trades_completed": 0},
         }
         self.match_stats = {pid: {"cash_spent": 0, "properties_bought": 0, "houses_built": 0, "rent_paid": 0, "taxes_paid": 0, "mortgages_taken": 0, "trades_completed": 0} for pid in range(4)}
+        self.action_logs: list[str] = ["Tournament arena initialized! Player 1 takes the opening turn."]
         self.reset(self.seed)
 
     def reset(self, seed: Optional[int] = None):
@@ -89,12 +90,15 @@ class GameSession:
             self.seed = seed
         else:
             self.seed = random.randint(1, 99999999)
+        self.action_logs = ["Tournament arena initialized! Player 1 takes the opening turn."]
         self.recent_trades = []
         self.pending_auction = None
         self.last_human_tax_payment = None
+        self.active_treaties: list[dict[str, Any]] = []
         self.game = MonopolyGame(num_players=4, seed=self.seed, max_turns=350, enable_logging=True)
         self.game.auction_handler = self._handle_game_auction
         self.game.interactive_human = True
+        self.game.immunity_checker = self._check_treaty_immunity
         self.match_stats = {pid: {"cash_spent": 0, "properties_bought": 0, "houses_built": 0, "rent_paid": 0, "taxes_paid": 0, "mortgages_taken": 0, "trades_completed": 0} for pid in range(4)}
         self.diplomatic_ledger = {
             1: {"affinity": 0, "gifts_received": [], "favors_owed": 0, "trades_completed": 0},
@@ -137,6 +141,31 @@ class GameSession:
         self.latest_speech = None
         self.action_logs = ["Game started. It is Player 1's turn!"]
         self._record_telemetry()
+
+    def _check_treaty_immunity(self, debtor_id: int, creditor_id: int, tile_index: int) -> tuple[bool, str]:
+        """Checks if rent is waived under any active diplomatic treaties or non-aggression pacts."""
+        for treaty in self.active_treaties:
+            if treaty.get("type") in ("RENT_TRUCE", "NON_AGGRESSION"):
+                parties = {treaty.get("player_a"), treaty.get("player_b"), treaty.get("party_a"), treaty.get("party_b")}
+                if debtor_id in parties and creditor_id in parties:
+                    turns = treaty.get("turns_remaining", 0)
+                    return True, f"Non-Aggression Pact ({turns} turns remaining)"
+        return False, ""
+
+    def advance_treaties(self):
+        """Decrements turns remaining on active treaties and expires concluded treaties."""
+        expired = []
+        for t in self.active_treaties:
+            t["turns_remaining"] -= 1
+            if t["turns_remaining"] <= 0:
+                expired.append(t)
+        for t in expired:
+            self.active_treaties.remove(t)
+            pa_id = t.get("player_a", t.get("party_a", 0))
+            pb_id = t.get("player_b", t.get("party_b", 1))
+            pa_name = self.game.players[pa_id].name if pa_id < len(self.game.players) else "Player"
+            pb_name = self.game.players[pb_id].name if pb_id < len(self.game.players) else "Bot"
+            self.log(f"DIPLOMATIC NOTICE: {t.get('title', 'Treaty')} between {pa_name} and {pb_name} has concluded.")
 
     def _record_telemetry(self):
         t = self.game.current_turn
@@ -358,14 +387,89 @@ class GameSession:
             raise HTTPException(status_code=400, detail="No active trade proposal to negotiate.")
         tp = self.incoming_trade_proposal
         bot_id = tp["bot_id"]
+        bot = self.game.players[bot_id]
         bot_name = tp["bot_name"]
         curr_cash = tp.get("bot_gives_cash", 0)
         max_cash = tp.get("max_cash_willing", curr_cash + 100)
+        board = self.game.board
 
+        msg_lower = message.lower()
+
+        # Check for requested properties
+        matched_props = []
+        for tile in board.tiles:
+            if tile.is_purchasable:
+                full_name = tile.name.lower()
+                short_name = full_name.replace(" avenue", "").replace(" place", "").replace(" railroad", "").replace(" gardens", "")
+                if full_name in msg_lower or short_name in msg_lower:
+                    matched_props.append(tile)
+
+        # Cash parsing
         nums = re.findall(r'\$?(\d+)', message)
         requested_cash = int(nums[0]) if nums else None
 
-        if requested_cash is not None:
+        # Check if user asks for generic "more properties" / "another property" / "deeds"
+        asks_more_props = any(w in msg_lower for w in ["more property", "more properties", "another property", "extra property", "another deed", "throw in a property", "throw in another", "give me properties", "add a property"])
+
+        reply = ""
+        can_raise = curr_cash < max_cash
+
+        # Case 1: Specific property requested
+        if matched_props:
+            target_tile = matched_props[0]
+            if target_tile.index in tp.get("bot_gives_props", []):
+                reply = f"I have already included {target_tile.name} in my offer! Do we have a deal?"
+            elif target_tile.owner == bot_id:
+                # Bot owns it. Check if it completes or is part of a monopoly for the bot
+                is_bot_monopoly = board.owns_full_group(bot_id, target_tile.color_group) if target_tile.color_group else False
+                if is_bot_monopoly:
+                    reply = f"I cannot surrender {target_tile.name}—it anchors my active color group! However, I can increase my cash offer to ${min(max_cash, curr_cash + 50)}."
+                    if can_raise:
+                        tp["bot_gives_cash"] = min(max_cash, curr_cash + 50)
+                        tp["offer_cash"] = tp["bot_gives_cash"]
+                else:
+                    # Bot agrees to give this property!
+                    if "bot_gives_props" not in tp:
+                        tp["bot_gives_props"] = []
+                    if "bot_gives_props_names" not in tp:
+                        tp["bot_gives_props_names"] = []
+                    tp["bot_gives_props"].append(target_tile.index)
+                    tp["bot_gives_props_names"].append(target_tile.name)
+                    tp["offer_props"] = tp["bot_gives_props"]
+                    if requested_cash is not None:
+                        tp["bot_gives_cash"] = min(requested_cash, max_cash)
+                        tp["offer_cash"] = tp["bot_gives_cash"]
+                    reply = f"Agreed! I will include {target_tile.name} in my offer. Accept the updated terms below to execute the trade."
+            elif target_tile.owner == 0:
+                reply = f"You already own {target_tile.name}! Did you want to offer that to me, or did you mean another deed?"
+            else:
+                owner_name = self.game.players[target_tile.owner].name if target_tile.owner is not None else "the Bank"
+                reply = f"I do not hold {target_tile.name} ({owner_name} owns it). I can only offer deeds from my own portfolio."
+
+        # Case 2: General request for more properties
+        elif asks_more_props:
+            current_offered = set(tp.get("bot_gives_props", []))
+            candidate_props = [
+                t for t in board.tiles
+                if t.owner == bot_id and t.index not in current_offered and not board.owns_full_group(bot_id, t.color_group)
+            ]
+            if candidate_props:
+                extra_tile = candidate_props[0]
+                if "bot_gives_props" not in tp:
+                    tp["bot_gives_props"] = []
+                if "bot_gives_props_names" not in tp:
+                    tp["bot_gives_props_names"] = []
+                tp["bot_gives_props"].append(extra_tile.index)
+                tp["bot_gives_props_names"].append(extra_tile.name)
+                tp["offer_props"] = tp["bot_gives_props"]
+                reply = f"I hear you. I am willing to sweeten the deal and add {extra_tile.name} to my offer! Accept the terms below to finalize."
+            else:
+                reply = f"I have no extra unaligned properties to spare. However, I can stretch my cash offer to ${max_cash}."
+                tp["bot_gives_cash"] = max_cash
+                tp["offer_cash"] = max_cash
+
+        # Case 3: Cash negotiation
+        elif requested_cash is not None:
             if requested_cash <= curr_cash:
                 tp["bot_gives_cash"] = requested_cash
                 tp["offer_cash"] = requested_cash
@@ -374,16 +478,16 @@ class GameSession:
             elif requested_cash <= max_cash:
                 tp["bot_gives_cash"] = requested_cash
                 tp["offer_cash"] = requested_cash
-                reply = f"Fair terms. I will meet your terms at ${requested_cash}. Do we have a deal?"
+                reply = f"Fair terms. I will meet your request at ${requested_cash}. Do we have a deal?"
                 can_raise = False
             else:
                 if curr_cash < max_cash:
                     tp["bot_gives_cash"] = max_cash
                     tp["offer_cash"] = max_cash
-                    reply = f"${requested_cash} exceeds my valuation ceiling, but I can stretch to ${max_cash}. That is my absolute highest offer."
+                    reply = f"${requested_cash} exceeds my ceiling, but I can stretch to ${max_cash}. That is my absolute best offer."
                     can_raise = False
                 else:
-                    reply = f"No deal at ${requested_cash}. ${curr_cash} is my absolute limit."
+                    reply = f"No deal at ${requested_cash}. ${curr_cash} is my absolute financial limit."
                     can_raise = False
         else:
             can_raise = curr_cash < max_cash
@@ -394,13 +498,16 @@ class GameSession:
                 tp["negotiation_step"] = tp.get("negotiation_step", 1) + 1
                 reply = f"Fair point. I will increase my cash offer to ${tp['bot_gives_cash']}. Do we have a deal?"
             else:
-                reply = f"${curr_cash} is my absolute limit. I cannot justify offering more for this property."
+                reply = f"${curr_cash} is my limit. I cannot justify offering more cash for this property."
 
         self.log(f"TRADE NEGOTIATION: {bot_name}: '{reply}'")
         return {
             "response": reply,
             "new_cash": tp["bot_gives_cash"],
+            "new_gives_props": tp.get("bot_gives_props", []),
+            "new_gives_props_names": tp.get("bot_gives_props_names", []),
             "max_reached": not can_raise,
+            "proposal": tp,
             "state": self.get_state(),
         }
 
@@ -424,16 +531,36 @@ class GameSession:
                     min_dev = min(board.tiles[i].num_houses + (5 if board.tiles[i].num_hotels else 0) for i in indices)
                     cost = board.tiles[indices[0]].house_cost
                     tier_cost = cost * len(indices)
-                    if min_dev < 5 and p0.cash >= cost:
-                        buildable.append({
-                            "group": g.name,
-                            "group_id": g.value,
-                            "min_dev": min_dev,
-                            "house_cost": cost,
-                            "tier_cost": tier_cost,
-                            "indices": indices,
-                            "names": [board.tiles[i].name for i in indices],
+                    props_info = []
+                    for i in indices:
+                        t = board.tiles[i]
+                        props_info.append({
+                            "index": i,
+                            "name": t.name,
+                            "num_houses": t.num_houses,
+                            "num_hotels": t.num_hotels,
+                            "house_cost": t.house_cost,
+                            "sell_refund": t.house_cost // 2,
+                            "can_build": board.can_build_house(i, 0) and p0.cash >= t.house_cost,
+                            "can_sell": board.can_sell_building(i, 0),
                         })
+                    max_dev_group = max(board.tiles[i].num_houses + (5 if board.tiles[i].num_hotels else 0) for i in indices)
+                    can_tier_build = min_dev < 5 and p0.cash >= tier_cost and all(board.can_build_house(i, 0) for i in indices)
+                    can_tier_sell = any(board.can_sell_building(i, 0) for i in indices)
+                    buildable.append({
+                        "group": g.name,
+                        "group_id": g.value,
+                        "min_dev": min_dev,
+                        "max_dev": max_dev_group,
+                        "house_cost": cost,
+                        "tier_cost": tier_cost,
+                        "tier_sell_refund": (cost // 2) * len(indices),
+                        "can_build_tier": can_tier_build,
+                        "can_sell_tier": can_tier_sell,
+                        "indices": indices,
+                        "names": [board.tiles[i].name for i in indices],
+                        "props": props_info,
+                    })
                 max_dev = max(board.tiles[i].num_houses + (5 if board.tiles[i].num_hotels else 0) for i in indices)
                 if max_dev > 0:
                     sellable.append({
@@ -503,6 +630,8 @@ class GameSession:
         # Tiles state
         tiles_data = []
         for t in board.tiles:
+            can_bld = board.can_build_house(t.index, 0) and p0.cash >= t.house_cost if t.owner == 0 else False
+            can_sll = board.can_sell_building(t.index, 0) if t.owner == 0 else False
             tiles_data.append({
                 "index": t.index,
                 "name": t.name,
@@ -510,6 +639,8 @@ class GameSession:
                 "is_mortgaged": t.is_mortgaged,
                 "num_houses": t.num_houses,
                 "num_hotels": t.num_hotels,
+                "can_build": can_bld,
+                "can_sell": can_sll,
                 "price": t.price,
                 "mortgage_value": t.mortgage_value,
                 "house_cost": t.house_cost,
@@ -543,6 +674,7 @@ class GameSession:
             "landed_tile": landed_tile_info,
             "buildable_groups": buildable,
             "sellable_groups": sellable,
+            "active_treaties": self.active_treaties,
             "mortgagable_props": mortgagable,
             "unmortgagable_props": unmortgagable,
             "chance_cards_remaining": len(board.chance_deck.cards),
@@ -742,22 +874,155 @@ class GameSession:
         if p0.cash < tier_cost:
             raise HTTPException(status_code=400, detail="Insufficient cash to build tier.")
 
+        # Check that all properties in the group can legally build
+        for idx in indices:
+            if not self.game.board.can_build_house(idx, 0):
+                raise HTTPException(status_code=400, detail=f"Cannot build on {self.game.board.tiles[idx].name} (bank inventory shortage or max development).")
+
         p0.cash -= tier_cost
         self.match_stats[0]["cash_spent"] += tier_cost
         self.match_stats[0]["houses_built"] += len(indices)
         for idx in indices:
-            t = self.game.board.tiles[idx]
-            if t.num_houses == 4:
-                t.num_houses = 0
-                t.num_hotels = 1
-                self.game.board.available_houses += 4
-                self.game.board.available_hotels -= 1
-            else:
-                t.num_houses += 1
-                self.game.board.available_houses -= 1
+            self.game.board.build_house(idx, 0)
 
         self.log(f"You developed {group_name} properties for -${tier_cost}! (Cash: ${p0.cash})")
         return self.get_state()
+
+    def build_house(self, tile_index: int) -> dict[str, Any]:
+        """Builds 1 house/hotel on a single property tile for the human player."""
+        p0 = self.game.players[0]
+        tile = self.game.board.tiles[tile_index]
+        if not self.game.board.can_build_house(tile_index, 0):
+            raise HTTPException(status_code=400, detail="Cannot build house here under Monopoly even-building rules or bank inventory limits.")
+        if p0.cash < tile.house_cost:
+            raise HTTPException(status_code=400, detail=f"Insufficient cash to build house on {tile.name} (${tile.house_cost} needed).")
+
+        p0.cash -= tile.house_cost
+        self.match_stats[0]["cash_spent"] += tile.house_cost
+        self.match_stats[0]["houses_built"] += 1
+        self.game.board.build_house(tile_index, 0)
+        b_name = "HOTEL" if tile.num_hotels else f"house #{tile.num_houses}"
+        self.log(f"You built a {b_name} on {tile.name} for -${tile.house_cost}! (Cash: ${p0.cash})")
+        return self.get_state()
+
+    def sell_house(self, tile_index: int) -> dict[str, Any]:
+        """Sells 1 building on a single property tile for the human player (50% resale)."""
+        p0 = self.game.players[0]
+        tile = self.game.board.tiles[tile_index]
+        if not self.game.board.can_sell_building(tile_index, 0):
+            raise HTTPException(status_code=400, detail="Cannot sell building here under Monopoly even-breakdown rules.")
+
+        refund = self.game.board.sell_building(tile_index, 0)
+        p0.cash += refund
+        b_name = "Hotel" if tile.num_houses == 4 else "House"
+        self.log(f"You sold a {b_name} on {tile.name} for +${refund}! (Cash: ${p0.cash})")
+        return self.get_state()
+
+    def sell_tier(self, group_name: str) -> dict[str, Any]:
+        """Sells 1 house/hotel from each property across an entire color group."""
+        p0 = self.game.players[0]
+        group = getattr(ColorGroup, group_name, None)
+        if group is None or not self.game.board.owns_full_group(0, group):
+            raise HTTPException(status_code=400, detail="You do not own this color group.")
+        indices = COLOR_GROUP_TILES[group]
+        total_refund = 0
+        for idx in indices:
+            if self.game.board.can_sell_building(idx, 0):
+                total_refund += self.game.board.sell_building(idx, 0)
+        if total_refund == 0:
+            raise HTTPException(status_code=400, detail="No buildings available to sell on this color group.")
+        p0.cash += total_refund
+        self.log(f"You sold buildings across {group_name} properties for +${total_refund}! (Cash: ${p0.cash})")
+        return self.get_state()
+
+    def chat(self, bot_id: int, message: str) -> dict[str, Any]:
+        p0 = self.game.players[0]
+        board = self.game.board
+
+        # If bot_id <= 0, message is addressed to the entire Table (General Chat)
+        if bot_id <= 0:
+            active_bots = [p for p in self.game.players if p.player_id != 0 and not p.is_bankrupt]
+            if not active_bots:
+                active_bots = [p for p in self.game.players if p.player_id != 0]
+            target = random.choice(active_bots)
+            target_id = target.player_id
+        else:
+            if bot_id >= len(self.game.players):
+                raise HTTPException(status_code=400, detail="Invalid bot ID.")
+            target_id = bot_id
+            target = self.game.players[target_id]
+
+        diplomatic_info = self.diplomatic_ledger.get(target_id, {})
+
+        all_players_info = [
+            {
+                "id": p.player_id,
+                "name": p.name,
+                "cash": p.cash,
+                "net_worth": p.net_worth(board),
+                "bankrupt": p.is_bankrupt,
+            }
+            for p in self.game.players
+        ]
+
+        ranked_by_nw = sorted(self.game.players, key=lambda p: p.net_worth(board), reverse=True)
+        leader = ranked_by_nw[0]
+
+        bot_prop_names = [t.name for t in board.tiles if t.owner == target_id]
+        human_prop_names = [t.name for t in board.tiles if t.owner == 0]
+        board_tiles_info = [{"index": t.index, "name": t.name, "owner": t.owner, "price": t.price} for t in board.tiles if t.is_purchasable]
+
+        context = {
+            "human_name": p0.name,
+            "human_cash": p0.cash,
+            "human_net_worth": p0.net_worth(board),
+            "bot_cash": target.cash,
+            "bot_net_worth": target.net_worth(board),
+            "turn": self.game.current_turn,
+            "affinity": diplomatic_info.get("affinity", 0),
+            "favors_owed": diplomatic_info.get("favors_owed", 0),
+            "gifts": diplomatic_info.get("gifts_received", []),
+            "trades_completed": diplomatic_info.get("trades_completed", 0),
+            "all_players": all_players_info,
+            "leader_id": leader.player_id,
+            "leader_name": leader.name,
+            "leader_nw": leader.net_worth(board),
+            "bot_prop_names": bot_prop_names,
+            "human_prop_names": human_prop_names,
+            "board_tiles": board_tiles_info,
+            "active_treaties": self.active_treaties,
+            "game_over": self.game.game_over,
+            "winner_id": self.game.winner_id,
+            "winner_name": self.game.players[self.game.winner_id].name if self.game.winner_id is not None else None,
+            "bot_is_bankrupt": target.is_bankrupt,
+            "human_is_bankrupt": p0.is_bankrupt,
+        }
+        personality = self.player_personalities.get(target_id, "")
+        chat_res = self.llm_strategist.chat(target_id, target.name, message, context, personality=personality)
+
+        reply = ""
+        new_treaty = None
+        if isinstance(chat_res, dict):
+            reply = chat_res.get("text", "")
+            new_treaty = chat_res.get("treaty")
+            if new_treaty:
+                self.active_treaties.append(new_treaty)
+                self.log(f"DIPLOMATIC TREATY RATIFIED: {new_treaty['title']} is now active! ({new_treaty['turns_remaining']} turns)")
+            aff_delta = chat_res.get("affinity_delta", 0)
+            if aff_delta:
+                diplomatic_info["affinity"] = min(100, diplomatic_info.get("affinity", 0) + aff_delta)
+        else:
+            reply = str(chat_res)
+
+        return {
+            "bot_id": target_id,
+            "bot_name": target.name,
+            "response": reply,
+            "is_table": (bot_id <= 0),
+            "active_treaties": self.active_treaties,
+            "treaty_ratified": new_treaty is not None,
+            "state": self.get_state(),
+        }
 
     def mortgage_property(self, prop_idx: int) -> dict[str, Any]:
         p0 = self.game.players[0]
@@ -821,6 +1086,7 @@ class GameSession:
         self.can_roll_again = False
         self.has_rolled = False
         self.game._advance_turn()
+        self.advance_treaties()
 
         # If human went bankrupt, keep advancing until game over or active bot
         while self.game.current_player_idx != 0 and not self.game.game_over:
@@ -1232,6 +1498,7 @@ class GameSession:
                 self.log(f"GAME OVER! Winner: {winner}")
             self.pending_decision = "GAME_OVER"
         elif self.game.current_player_idx == 0 and not p0.is_bankrupt:
+            self.advance_treaties()
             self.pending_decision = "JAIL" if self.game.players[0].in_jail else "ROLL"
             self.has_rolled = False
             self.consecutive_doubles = 0
@@ -1655,9 +1922,21 @@ class BuildRequest(BaseModel):
 def api_build(req: BuildRequest):
     return session.build_tier(req.group)
 
+@app.post("/api/sell_tier")
+def api_sell_tier(req: BuildRequest):
+    return session.sell_tier(req.group)
+
 
 class PropRequest(BaseModel):
     index: int
+
+@app.post("/api/build_house")
+def api_build_house(req: PropRequest):
+    return session.build_house(req.index)
+
+@app.post("/api/sell_house")
+def api_sell_house(req: PropRequest):
+    return session.sell_house(req.index)
 
 @app.post("/api/mortgage")
 def api_mortgage(req: PropRequest):
@@ -1735,61 +2014,7 @@ class ChatRequest(BaseModel):
 
 @app.post("/api/chat")
 def api_chat(req: ChatRequest):
-    p0 = session.game.players[0]
-    board = session.game.board
-
-    # If bot_id <= 0, message is addressed to the entire Table (General Chat)
-    if req.bot_id <= 0:
-        active_bots = [p for p in session.game.players if p.player_id != 0 and not p.is_bankrupt]
-        if not active_bots:
-            active_bots = [p for p in session.game.players if p.player_id != 0]
-        target = random.choice(active_bots)
-        target_id = target.player_id
-    else:
-        if req.bot_id >= len(session.game.players):
-            raise HTTPException(status_code=400, detail="Invalid bot ID.")
-        target_id = req.bot_id
-        target = session.game.players[target_id]
-
-    diplomatic_info = session.diplomatic_ledger.get(target_id, {})
-
-    all_players_info = [
-        {
-            "id": p.player_id,
-            "name": p.name,
-            "cash": p.cash,
-            "net_worth": p.net_worth(board),
-            "bankrupt": p.is_bankrupt,
-        }
-        for p in session.game.players
-    ]
-
-    context = {
-        "human_name": p0.name,
-        "human_cash": p0.cash,
-        "human_net_worth": p0.net_worth(board),
-        "bot_cash": target.cash,
-        "bot_net_worth": target.net_worth(board),
-        "turn": session.game.current_turn,
-        "affinity": diplomatic_info.get("affinity", 0),
-        "favors_owed": diplomatic_info.get("favors_owed", 0),
-        "gifts": diplomatic_info.get("gifts_received", []),
-        "trades_completed": diplomatic_info.get("trades_completed", 0),
-        "all_players": all_players_info,
-        "game_over": session.game.game_over,
-        "winner_id": session.game.winner_id,
-        "winner_name": session.game.players[session.game.winner_id].name if session.game.winner_id is not None else None,
-        "bot_is_bankrupt": target.is_bankrupt,
-        "human_is_bankrupt": p0.is_bankrupt,
-    }
-    personality = session.player_personalities.get(target_id, "")
-    reply = session.llm_strategist.chat(target_id, target.name, req.message, context, personality=personality)
-    return {
-        "bot_id": target_id,
-        "bot_name": target.name,
-        "response": reply,
-        "is_table": (req.bot_id <= 0)
-    }
+    return session.chat(req.bot_id, req.message)
 
 
 
