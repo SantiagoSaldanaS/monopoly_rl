@@ -17,6 +17,8 @@ Monopoly is an imperfect-information, multi-agent environment featuring stochast
    - **LLM Strategist**: Optional local LLM connector (via Ollama) or heuristic fallback for dynamic trade negotiation and dialogue.
 5. **Interactive Web Arena (`visualizer` & `play_server.py`)**: Real-time browser interface with board visualization, 3D dice animations, diplomacy chat, and interactive trading/auctions.
 
+![Monopoly RL Board Arena](board.png)
+
 ---
 
 ## Project Structure
